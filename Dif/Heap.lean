@@ -137,6 +137,19 @@ theorem join_spec (f g : PermMap) (h : f.Joinable g) (l : Nat) :
     (f l).join (g l) = some (f.join g h l) := by
   simp [PermMap.join, Option.some_get]
 
+/-- Pointwise computation of the join: `(f ⊕ g) l = p` iff the permission
+join of the pointwise values is `some p`. -/
+theorem join_apply_eq_iff (f g : PermMap) (h : f.Joinable g) (l : Nat)
+    (p : Permission) :
+    f.join g h l = p ↔ (f l).join (g l) = some p := by
+  have hs := join_spec f g h l
+  constructor
+  · intro he
+    rw [he] at hs
+    exact hs
+  · intro he
+    exact Option.some.inj (hs.symm.trans he)
+
 @[simp] theorem empty_join (f : PermMap) (h : PermMap.empty.Joinable f) :
     PermMap.empty.join f h = f := rfl
 
