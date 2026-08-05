@@ -154,6 +154,138 @@ theorem Hprop.acc_exclusive (loc : Nat) (h : Heap) (π : PermMap) :
   have h1' : π₁ loc = Permission.write := h1
   have h2' : π₂ loc = Permission.write := h2
   have := hj loc
-  simp_all
+  grind
+
+/-! ## Points-To -/
+
+/-- The heap stores `v` at `loc`, and exactly permission `p` is held there.
+This is the first heap-reading assertion; the permission conjunct is what
+makes the heap read self-framing (see `pointsToAt_selfFraming`). -/
+def Hprop.pointsToAt (loc : Nat) (v : HeapVal) (p : Permission) : Hprop
+| h, π => h loc = v ∧ π loc = p
+
+/-- Full points-to: `loc` stores `v` and write permission is held. -/
+def Hprop.pointsTo (loc : Nat) (v : HeapVal) : Hprop :=
+  Hprop.pointsToAt loc v .write
+
+/-- Read-only points-to: `loc` stores `v` and read permission is held. -/
+def Hprop.pointsToRO (loc : Nat) (v : HeapVal) : Hprop :=
+  Hprop.pointsToAt loc v .read
+
+/-- Forgetting the stored value turns a points-to into a bare accessibility. -/
+theorem Hprop.pointsToAt_entails_accAt (loc : Nat) (v : HeapVal) (p : Permission) :
+    Hprop.pointsToAt loc v p ⊢ Hprop.accAt loc p :=
+  fun _ _ hp => hp.2
+
+theorem Hprop.pointsTo_entails_acc (loc : Nat) (v : HeapVal) :
+    Hprop.pointsTo loc v ⊢ Hprop.acc loc :=
+  pointsToAt_entails_accAt loc v .write
+
+theorem Hprop.pointsToRO_entails_accRO (loc : Nat) (v : HeapVal) :
+    Hprop.pointsToRO loc v ⊢ Hprop.accRO loc :=
+  pointsToAt_entails_accAt loc v .read
+
+/-- Two points-to assertions at the same location agree on the value, even
+across a separating conjunction: there is only one total heap. In
+partial-heaps separation logic the analogous fact requires an overlap
+argument; in the IDF model it is immediate. -/
+theorem Hprop.pointsToAt_agree {loc : Nat} {v w : HeapVal} {p q : Permission}
+    {h : Heap} {π : PermMap}
+    (hs : (Hprop.pointsToAt loc v p ∗ Hprop.pointsToAt loc w q) h π) : v = w := by
+  have ⟨π₁, π₂, hj, hjoin, h1, h2⟩ := hs
+  have h1' : h loc = v ∧ π₁ loc = p := h1
+  have h2' : h loc = w ∧ π₂ loc = q := h2
+  exact h1'.1.symm.trans h2'.1
+
+/-- Write points-to is exclusive, whatever the claimed values are. -/
+theorem Hprop.pointsTo_exclusive (loc : Nat) (v w : HeapVal) (h : Heap)
+    (π : PermMap) : ¬ (Hprop.pointsTo loc v ∗ Hprop.pointsTo loc w) h π :=
+  fun hs => acc_exclusive loc h π
+    (sep_mono (pointsTo_entails_acc loc v) (pointsTo_entails_acc loc w) h π hs)
+
+/-- A write points-to splits into two read halves of the same value. -/
+theorem Hprop.pointsTo_split (loc : Nat) (v : HeapVal) :
+    Hprop.pointsTo loc v ⊣⊢ Hprop.pointsToRO loc v ∗ Hprop.pointsToRO loc v := by
+  apply equiv.of_entails
+  · intro h π hp
+    have hp' : h loc = v ∧ π loc = Permission.write := hp
+    have ⟨π₁, π₂, hj, hjoin, ha1, ha2⟩ := (acc_split loc).mp h π hp'.2
+    exact ⟨π₁, π₂, hj, hjoin, ⟨hp'.1, ha1⟩, ⟨hp'.1, ha2⟩⟩
+  · intro h π ⟨π₁, π₂, hj, hjoin, h1, h2⟩
+    have h1' : h loc = v ∧ π₁ loc = Permission.read := h1
+    have h2' : h loc = v ∧ π₂ loc = Permission.read := h2
+    exact ⟨h1'.1, (acc_split loc).mpr h π ⟨π₁, π₂, hj, hjoin, h1'.2, h2'.2⟩⟩
+
+/-! ## Self-framing -/
+
+/-- An assertion is self-framing if it only depends on the part of the heap
+covered by its permission map: modifying locations outside the footprint
+cannot invalidate it. This is the central well-formedness condition of
+implicit dynamic frames. -/
+def Hprop.SelfFraming (P : Hprop) : Prop :=
+  ∀ h1 h2 π,
+    Heap.AgreeOn π h1 h2 ->
+    P h1 π -> P h2 π
+
+/-- Pure permission assertions never read the heap, so they are self-framing. -/
+theorem Hprop.accAt_selfFraming (loc : Nat) (p : Permission) :
+    (Hprop.accAt loc p).SelfFraming :=
+  fun _ _ _ _ hp => hp
+
+theorem Hprop.acc_selfFraming (loc : Nat) : (Hprop.acc loc).SelfFraming :=
+  accAt_selfFraming loc .write
+
+theorem Hprop.accRO_selfFraming (loc : Nat) : (Hprop.accRO loc).SelfFraming :=
+  accAt_selfFraming loc .read
+
+theorem Hprop.empty_selfFraming : Hprop.empty.SelfFraming :=
+  fun _ _ _ _ hp => hp
+
+/-- A points-to with nonzero permission is self-framing: the permission held
+at `loc` licenses the heap read at `loc`. -/
+theorem Hprop.pointsToAt_selfFraming (loc : Nat) (v : HeapVal) {p : Permission}
+    (hp : p ≠ Permission.zero) : (Hprop.pointsToAt loc v p).SelfFraming := by
+  intro h1 h2 π hagree hp1
+  have hp1' : h1 loc = v ∧ π loc = p := hp1
+  have hloc : h1 loc = h2 loc := hagree loc (by rw [hp1'.2]; exact hp)
+  exact ⟨hloc.symm.trans hp1'.1, hp1'.2⟩
+
+theorem Hprop.pointsTo_selfFraming (loc : Nat) (v : HeapVal) :
+    (Hprop.pointsTo loc v).SelfFraming :=
+  pointsToAt_selfFraming loc v (fun h => nomatch h)
+
+theorem Hprop.pointsToRO_selfFraming (loc : Nat) (v : HeapVal) :
+    (Hprop.pointsToRO loc v).SelfFraming :=
+  pointsToAt_selfFraming loc v (fun h => nomatch h)
+
+/-- Reading the heap without permission is NOT self-framing: with zero
+permission at `loc`, the footprint excludes `loc`, yet the assertion
+constrains the heap there. This counterexample is why self-framing is a
+nontrivial property. -/
+theorem Hprop.pointsToAt_zero_not_selfFraming (loc : Nat) :
+    ¬ (Hprop.pointsToAt loc (HeapVal.num 0) Permission.zero).SelfFraming := by
+  intro hsf
+  have h2 := hsf (fun _ => HeapVal.num 0)
+    (Heap.update (fun _ => HeapVal.num 0) loc (HeapVal.num 1))
+    PermMap.empty (Heap.agreeOn_empty _ _) ⟨rfl, rfl⟩
+  have h2' : Heap.update (fun _ => HeapVal.num 0) loc (HeapVal.num 1) loc
+      = HeapVal.num 0 := h2.1
+  have hup : Heap.update (fun _ => HeapVal.num 0) loc (HeapVal.num 1) loc
+      = HeapVal.num 1 := Heap.update_same _ loc (HeapVal.num 1)
+  exact nomatch hup.symm.trans h2'
+
+/-- Self-framing is closed under separating conjunction: each conjunct reads
+the heap only within its own half of the footprint. -/
+theorem Hprop.SelfFraming.sep {P Q : Hprop} (hP : P.SelfFraming)
+    (hQ : Q.SelfFraming) : (P ∗ Q).SelfFraming := by
+  intro h1 h2 π hagree ⟨π₁, π₂, hj, hjoin, hp, hq⟩
+  subst hjoin
+  have ⟨ha1, ha2⟩ := (Heap.agreeOn_join_iff hj).mp hagree
+  exact ⟨π₁, π₂, hj, rfl, hP h1 h2 π₁ ha1 hp, hQ h1 h2 π₂ ha2 hq⟩
+
+/-- Self-framing respects equivalence of assertions. -/
+theorem Hprop.SelfFraming.of_equiv {P Q : Hprop} (hP : P.SelfFraming)
+    (he : P ⊣⊢ Q) : Q.SelfFraming :=
+  fun h1 h2 π hagree hq => (he h2 π).mp (hP h1 h2 π hagree ((he h1 π).mpr hq))
 
 end Dif
